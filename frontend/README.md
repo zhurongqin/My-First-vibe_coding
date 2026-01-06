@@ -1,46 +1,66 @@
-# Getting Started with Create React App
+# 图像背景移除前端应用
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+本项目是图像背景移除Web应用的前端部分，使用React构建。
 
-## Available Scripts
+## 功能特性
 
-In the project directory, you can run:
+- 图像上传界面
+- 图像预览功能
+- 与后端API交互
+- 处理进度显示
 
-### `npm start`
+## 技术栈
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+- React: 前端框架
+- TypeScript: 类型检查
+- React Scripts: 构建工具
+- Webpack: 模块打包
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+## 快速开始
 
-### `npm test`
+### 环境要求
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+- Node.js 14+
+- npm 或 yarn
 
-### `npm run build`
+### 安装依赖
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+```bash
+npm install
+```
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+### 配置
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+环境变量在 `.env` 文件中配置，主要设置API服务器地址：
 
-### `npm run eject`
+```bash
+REACT_APP_API_BASE_URL=http://localhost:8000
+```
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+### 启动开发服务器
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+```bash
+npm start
+```
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+应用将在 `http://localhost:3000` 上启动。
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+### 构建生产版本
 
-## Learn More
+```bash
+npm run build
+```
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+## 主要组件
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+- `Api`: 与后端API交互的客户端
+- `Upload`: 文件上传组件
+- `Preview`: 图像预览组件
+
+## API集成
+
+前端通过 `services/api.js` 与后端服务交互，包括：
+
+- 健康检查
+- 文件上传
+- 处理进度查询
