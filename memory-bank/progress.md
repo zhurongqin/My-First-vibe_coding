@@ -279,3 +279,43 @@
 
 ### 当前状态
 第7步已完成，文件上传API已实现并经过测试，包含类型验证、大小限制和临时存储功能，准备进入下一步集成Celery异步任务队列
+
+## 第8步：集成Celery异步任务队列
+
+### 完成内容
+- 配置Celery和Redis作为消息代理
+- 创建图像处理异步任务
+- 实现任务状态追踪机制
+- 配置任务超时和重试策略
+
+### 详细说明
+1. Celery配置：
+   - 在`backend/app/celery_config.py`中配置了Celery应用
+   - 设置Redis作为broker和result_backend（redis://localhost:6379/0）
+   - 配置了任务序列化、时区、路由等参数
+   - 配置了worker_prefetch_multiplier和task_acks_late以优化任务处理
+
+2. 异步任务创建：
+   - 在`backend/app/tasks.py`中创建了remove_background_task任务
+   - 集成了外部抠图API（http://115.159.43.168:5000/api/remove-bg/base64）
+   - 实现了文件读取、base64编码、API调用、结果保存的完整流程
+   - 添加了错误处理和重试机制（最多3次，间隔递增：1秒、3秒、5秒）
+
+3. 任务状态追踪：
+   - 更新了`/api/v1/routes.py`中的上传接口，启动异步任务并返回任务ID
+   - 实现了`/status/{task_id}`接口，使用AsyncResult查询任务状态
+   - 实现了`/result/{task_id}`接口，返回处理结果
+   - 实现了`/download/{task_id}`接口，提供处理后图像的下载
+
+4. 重试策略：
+   - 配置任务最大重试次数为3次
+   - 实现递增延迟重试逻辑（1秒、3秒、5秒）
+   - 记录重试日志以便调试
+
+5. 与上传API集成：
+   - 上传API现在会启动异步任务而不是同步处理
+   - 返回任务ID供前端查询进度
+   - 保持了原有的文件验证和存储功能
+
+### 当前状态
+第8步已完成，Celery异步任务队列已集成，实现了任务状态追踪和重试机制，准备进入下一步集成外部抠图API
