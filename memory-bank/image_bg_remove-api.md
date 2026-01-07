@@ -41,7 +41,8 @@ unique_name	string	服务器端抠图文件唯一标识名称
 接口描述：接收 Base64 编码图片字符串，返回抠图结果（支持带 / 不带 data:image 前缀）
 请求参数
 参数名	必选	类型	描述
-base64_str	是	string	Base64 图片编码（支持：带前缀 / 纯编码字符串）
+原始 JSON	是	string	Base64 图片编码（字符串需包含完整的 data:image/xxx;base64, 前缀）
+重点提醒：请求体不是 JSON 对象（如{"base64_str": "xxx"}），而是纯 Base64 字符串（带双引号），否则会返回 400 错误（Base64 解码失败：argument should be a bytes-like object or ASCII string, not 'dict'）。
 返回结果
 字段名	类型	描述
 code	int	状态码（0 = 成功，非 0 = 失败）
