@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from .config import settings
 from .api.v1 import api_router
 import logging
+from .rate_limit import check_rate_limit
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +26,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """
+    限流中间件，应用于所有请求
+    """
+    # 对特定路径跳过限流
+    if request.url.path not in ["/health", "/docs", "/redoc", f"{settings.API_V1_STR}/upload"]:
+        response = await call_next(request)
+        return response
+    
+    # 对上传接口应用限流
+    if request.url.path == f"{settings.API_V1_STR}/upload":
+        check_rate_limit(request, max_requests=60, window=60)  # 60次/分钟
+    
+    response = await call_next(request)
+    return response
 
 # 包含API路由
 app.include_router(

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from ...tasks import remove_background_task
+from ...tasks import remove_background_task, cleanup_old_files
 from celery.result import AsyncResult
 from fastapi.responses import FileResponse
 import os
@@ -103,3 +103,14 @@ async def download_result(task_id: str):
             raise HTTPException(status_code=500, detail="任务处理失败")
     else:
         raise HTTPException(status_code=400, detail="任务尚未完成或失败")
+
+@router.post("/cleanup")
+async def trigger_cleanup():
+    """
+    手动触发文件清理任务
+    """
+    task = cleanup_old_files.delay()
+    return {
+        "message": "文件清理任务已启动",
+        "task_id": task.id
+    }

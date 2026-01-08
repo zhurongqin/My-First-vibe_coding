@@ -1,160 +1,105 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Response
-from typing import Optional
-import uuid
-from datetime import datetime
-import os
-from ...config import settings
+from fastapi import APIRouter, UploadFile, File
+from fastapi.responses import JSONResponse
 from ...tasks import remove_background_task
-from celery.result import AsyncResult
-from fastapi.responses import FileResponse
+from ...config import settings
+import uuid
+import os
+import time
+from typing import Dict, Any
 
 router = APIRouter()
+
+# 简单的内存缓存实现（生产环境建议使用Redis）
+cache: Dict[str, Any] = {}
+CACHE_TIMEOUT = 300  # 5分钟缓存过期时间
+
+
+def is_cached(file_content: bytes) -> str:
+    """检查文件内容是否已在缓存中"""
+    file_hash = hash(file_content)
+    if file_hash in cache:
+        cached_item = cache[file_hash]
+        if time.time() - cached_item['timestamp'] < CACHE_TIMEOUT:
+            return cached_item['result']
+        else:
+            # 缓存过期，删除它
+            del cache[file_hash]
+    return None
+
+
+def cache_result(file_content: bytes, result: Any):
+    """将结果缓存"""
+    file_hash = hash(file_content)
+    cache[file_hash] = {
+        'result': result,
+        'timestamp': time.time()
+    }
+
 
 @router.post("/")
 async def upload_image(file: UploadFile = File(...)):
     """
-    上传图片接口
+    上传图像并开始背景移除任务
     """
-    # 验证文件类型
-    allowed_types = settings.ALLOWED_FILE_TYPES
-    if file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail=f"不支持的文件类型: {file.content_type}")
-    
-    # 读取文件内容以验证大小
-    contents = await file.read()
-    file_size = len(contents)
-    
-    # 验证文件大小 (10MB限制)
-    if file_size > settings.MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"文件大小超出限制: {file_size} bytes > {settings.MAX_FILE_SIZE} bytes"
+    # 检查文件类型
+    if file.content_type not in settings.ALLOWED_FILE_TYPES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "不支持的文件类型",
+                "supported_types": settings.ALLOWED_FILE_TYPES
+            }
         )
     
-    # 重新设置文件指针以供后续使用
-    await file.seek(0)
+    # 读取文件内容
+    file_content = await file.read()
     
-    # 生成唯一文件名
+    # 检查文件大小
+    if len(file_content) > settings.MAX_FILE_SIZE:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": f"文件大小超过限制 ({settings.MAX_FILE_SIZE / (1024*1024):.1f}MB)",
+                "file_size": len(file_content)
+            }
+        )
+    
+    # 检查缓存
+    cached_result = is_cached(file_content)
+    if cached_result:
+        return {
+            "message": "使用缓存结果",
+            "task_id": cached_result.get('task_id'),
+            "cached": True
+        }
+    
+    # 生成唯一ID
     file_id = str(uuid.uuid4())
-    filename = f"{file_id}_{file.filename}"
-    file_path = os.path.join(settings.UPLOAD_FOLDER, filename)
     
-    # 保存文件到临时目录
-    with open(file_path, "wb") as buffer:
-        buffer.write(contents)
+    # 创建上传目录（如果不存在）
+    os.makedirs(settings.UPLOAD_FOLDER, exist_ok=True)
     
-    # 启动异步任务处理图像
-    output_filename = f"{file_id}_output.png"
-    output_path = os.path.join(settings.OUTPUT_FOLDER, output_filename)
+    # 保存上传的文件
+    input_path = os.path.join(settings.UPLOAD_FOLDER, f"{file_id}_{file.filename}")
+    with open(input_path, 'wb') as f:
+        f.write(file_content)
     
-    task = remove_background_task.delay(file_path, output_path)
+    # 创建输出目录
+    os.makedirs(settings.OUTPUT_FOLDER, exist_ok=True)
     
+    # 生成输出文件路径
+    output_path = os.path.join(settings.OUTPUT_FOLDER, f"{file_id}_output.png")
+    
+    # 启动异步任务
+    task = remove_background_task.delay(input_path, output_path)
+    
+    # 缓存任务ID
+    cache_result(file_content, {"task_id": task.id})
+    
+    # 返回任务ID
     return {
         "filename": file.filename,
-        "original_filename": file.filename,
-        "stored_filename": filename,
-        "content_type": file.content_type,
-        "size": file_size,
-        "upload_id": file_id,
-        "task_id": task.id,  # 添加任务ID
-        "output_path": output_path,
-        "timestamp": datetime.now().isoformat(),
-        "message": "文件上传成功，后台处理中"
+        "file_id": file_id,
+        "task_id": task.id,
+        "message": "图像上传成功，正在处理中"
     }
-
-@router.get("/status/{task_id}")
-async def get_processing_status(task_id: str):
-    """
-    获取处理状态接口
-    """
-    task = AsyncResult(task_id, app=remove_background_task.app)
-    
-    if task.state == 'PENDING':
-        # 任务尚未开始
-        response = {
-            "task_id": task_id,
-            "status": "pending",
-            "progress": 0,
-            "message": "任务正在排队中"
-        }
-    elif task.state == 'PROGRESS':
-        # 任务正在处理中
-        response = {
-            "task_id": task_id,
-            "status": "processing",
-            "progress": task.info.get('progress', 50),
-            "message": "图像处理中..."
-        }
-    elif task.state == 'SUCCESS':
-        # 任务成功完成
-        response = {
-            "task_id": task_id,
-            "status": "completed",
-            "result": task.result,
-            "message": "处理完成"
-        }
-    else:
-        # 任务失败或异常
-        response = {
-            "task_id": task_id,
-            "status": "failed",
-            "error": str(task.info),
-            "message": "处理失败"
-        }
-    
-    return response
-
-@router.get("/result/{task_id}")
-async def get_processing_result(task_id: str):
-    """
-    获取处理结果接口
-    """
-    task = AsyncResult(task_id, app=remove_background_task.app)
-    
-    if task.state == 'SUCCESS':
-        result = task.result
-        return {
-            "task_id": task_id,
-            "status": "completed",
-            "result_data": result,
-            "result_url": f"/api/v1/download/{task_id}",
-            "message": "处理完成"
-        }
-    elif task.state in ('PENDING', 'PROGRESS'):
-        return {
-            "task_id": task_id,
-            "status": "processing",
-            "message": "图像仍在处理中"
-        }
-    else:
-        return {
-            "task_id": task_id,
-            "status": "failed",
-            "error": str(task.info),
-            "message": "处理失败"
-        }
-
-@router.get("/download/{task_id}")
-async def download_result(task_id: str):
-    """
-    下载处理结果接口
-    """
-    task = AsyncResult(task_id, app=remove_background_task.app)
-    
-    if task.state == 'SUCCESS':
-        result = task.result
-        if result and result.get("status") == "success":
-            output_path = result.get("output_path")
-            if os.path.exists(output_path):
-                # 返回处理后的图像文件
-                return FileResponse(
-                    path=output_path,
-                    media_type='image/png',
-                    filename=os.path.basename(output_path)
-                )
-            else:
-                raise HTTPException(status_code=404, detail="处理后的文件未找到")
-        else:
-            raise HTTPException(status_code=500, detail="任务处理失败")
-    else:
-        raise HTTPException(status_code=400, detail="任务尚未完成或失败")

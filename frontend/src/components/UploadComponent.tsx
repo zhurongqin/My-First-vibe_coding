@@ -1,6 +1,7 @@
-import React, { useState, useRef, DragEvent, ChangeEvent } from 'react';
+import React, { useState, useRef, DragEvent, ChangeEvent, useEffect } from 'react';
 import ImagePreview from './ImagePreview';
 import apiClient from '../services/api';
+import { API_BASE_URL } from '../config/api';
 
 interface FileUploadProps {
   onFileUpload?: (file: File) => void;
@@ -16,15 +17,29 @@ const UploadComponent: React.FC<FileUploadProps> = ({
   const [dragActive, setDragActive] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [uploadStatus, setUploadStatus] = useState<'idle' | 'valid' | 'invalid' | 'uploading' | 'success' | 'error'>('idle');
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'valid' | 'invalid' | 'uploading' | 'processing' | 'success' | 'error'>('idle');
   const [progress, setProgress] = useState<number>(0);
   const [errorMessages, setErrorMessages] = useState<string[]>([]);
   const [taskId, setTaskId] = useState<string | null>(null);
+  const [processedImageUrl, setProcessedImageUrl] = useState<string | null>(null);
+  const [taskStatusMessage, setTaskStatusMessage] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const retryCountRef = useRef<number>(0);
+  const maxRetries = 3;
 
   // 允许的文件类型
   const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/bmp'];
   const maxSize = 10 * 1024 * 1024; // 10MB
+
+  // 清理轮询定时器
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+      }
+    };
+  }, []);
 
   const validateFile = (file: File): boolean => {
     const errors: string[] = [];
@@ -100,8 +115,118 @@ const UploadComponent: React.FC<FileUploadProps> = ({
     setErrorMessages([]);
     setProgress(0);
     setTaskId(null);
+    setProcessedImageUrl(null);
+    setTaskStatusMessage('');
+    retryCountRef.current = 0;
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
+    }
+    
+    // 清除轮询
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  };
+
+  // 开始轮询任务状态
+  const startPolling = (id: string) => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+    }
+    
+    setUploadStatus('processing');
+    setTaskStatusMessage('任务正在排队中...');
+    
+    pollingRef.current = setInterval(async () => {
+      try {
+        const status = await apiClient.getProcessingStatus(id);
+        
+        switch (status.status) {
+          case 'pending':
+            setTaskStatusMessage('任务正在排队中...');
+            setProgress(10);
+            break;
+          case 'processing':
+            setTaskStatusMessage(status.message || '图像处理中...');
+            setProgress(status.progress || 50);
+            break;
+          case 'completed':
+            setTaskStatusMessage('处理完成！');
+            setProgress(100);
+            if (pollingRef.current) {
+              clearInterval(pollingRef.current);
+              pollingRef.current = null;
+            }
+            setUploadStatus('success');
+            setProcessedImageUrl(`${API_BASE_URL}/api/v1/tasks/download/${id}`);
+            retryCountRef.current = 0; // 重置重试计数
+            break;
+          case 'failed':
+            setTaskStatusMessage('处理失败');
+            setUploadStatus('error');
+            setErrorMessages([status.message || '任务处理失败']);
+            if (pollingRef.current) {
+              clearInterval(pollingRef.current);
+              pollingRef.current = null;
+            }
+            break;
+          default:
+            setTaskStatusMessage('未知状态');
+        }
+      } catch (error: any) {
+        console.error('获取任务状态失败:', error);
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+        setUploadStatus('error');
+        setErrorMessages(['获取任务状态失败']);
+        if (onUploadError) {
+          onUploadError(error);
+        }
+      }
+    }, 2000); // 每2秒轮询一次
+  };
+
+  const handleRetry = async () => {
+    if (retryCountRef.current >= maxRetries) {
+      setErrorMessages([`已达到最大重试次数 (${maxRetries}次)`]);
+      return;
+    }
+
+    retryCountRef.current += 1;
+    setUploadStatus('uploading');
+    setErrorMessages([]);
+    
+    if (!selectedFile) return;
+
+    try {
+      const response = await apiClient.uploadImage(selectedFile, (progress: number) => {
+        setProgress(Math.round(progress));
+      });
+      
+      const id = response.task_id;
+      setTaskId(id);
+      
+      // 开始轮询任务状态
+      startPolling(id);
+      
+      if (onUploadSuccess) {
+        onUploadSuccess(response);
+      }
+    } catch (error: any) {
+      setUploadStatus('error');
+      const errorMsg = error.message || `上传失败，请重试 (${retryCountRef.current}/${maxRetries})`;
+      setErrorMessages([errorMsg]);
+      
+      if (retryCountRef.current >= maxRetries) {
+        setErrorMessages([`${errorMsg}，已达到最大重试次数`]);
+      }
+      
+      if (onUploadError) {
+        onUploadError(error);
+      }
     }
   };
 
@@ -111,14 +236,18 @@ const UploadComponent: React.FC<FileUploadProps> = ({
     setUploadStatus('uploading');
     setProgress(0);
     setErrorMessages([]);
+    retryCountRef.current = 0; // 重置重试计数
 
     try {
       const response = await apiClient.uploadImage(selectedFile, (progress: number) => {
         setProgress(Math.round(progress));
       });
       
-      setUploadStatus('success');
-      setTaskId(response.upload_id || response.task_id);
+      const id = response.task_id;
+      setTaskId(id);
+      
+      // 开始轮询任务状态
+      startPolling(id);
       
       if (onUploadSuccess) {
         onUploadSuccess(response);
@@ -147,7 +276,7 @@ const UploadComponent: React.FC<FileUploadProps> = ({
         onDrop={handleDrop}
       >
         <div className="upload-content">
-          {previewUrl && selectedFile ? (
+          {previewUrl && selectedFile && !processedImageUrl ? (
             <ImagePreview 
               src={previewUrl}
               fileName={selectedFile.name}
@@ -155,6 +284,27 @@ const UploadComponent: React.FC<FileUploadProps> = ({
               fileType={selectedFile.type}
               onRemove={handleRemoveFile}
             />
+          ) : processedImageUrl ? (
+            <div className="result-container">
+              <h3>处理结果</h3>
+              <img 
+                src={processedImageUrl} 
+                alt="处理后的图像" 
+                style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }}
+              />
+              <div className="result-actions">
+                <a 
+                  href={processedImageUrl} 
+                  download={`processed_${selectedFile?.name || 'image'}`}
+                  className="download-btn"
+                >
+                  下载图像
+                </a>
+                <button onClick={handleRemoveFile} className="new-upload-btn">
+                  上传新图像
+                </button>
+              </div>
+            </div>
           ) : (
             <>
               <p>拖拽文件到此处或点击上传</p>
@@ -177,9 +327,9 @@ const UploadComponent: React.FC<FileUploadProps> = ({
             </>
           )}
           
-          {selectedFile && (
+          {selectedFile && !processedImageUrl && (
             <div className="upload-controls">
-              {uploadStatus === 'uploading' ? (
+              {uploadStatus === 'uploading' || uploadStatus === 'processing' ? (
                 <div className="progress-container">
                   <div className="progress-bar">
                     <div 
@@ -187,21 +337,23 @@ const UploadComponent: React.FC<FileUploadProps> = ({
                       style={{ width: `${progress}%` }}
                     ></div>
                   </div>
-                  <div className="progress-text">{progress}%</div>
+                  <div className="progress-text">{progress}% {taskStatusMessage && `- ${taskStatusMessage}`}</div>
                 </div>
               ) : null}
               
               <button 
                 onClick={handleUpload} 
                 className="upload-btn"
-                disabled={uploadStatus === 'uploading' || uploadStatus === 'success'}
+                disabled={uploadStatus === 'uploading' || uploadStatus === 'processing' || uploadStatus === 'success'}
               >
-                {uploadStatus === 'uploading' ? '上传中...' : '开始上传'}
+                {uploadStatus === 'uploading' ? '上传中...' : 
+                 uploadStatus === 'processing' ? '处理中...' : 
+                 '开始上传'}
               </button>
             </div>
           )}
           
-          {uploadStatus === 'success' && taskId && (
+          {uploadStatus === 'success' && taskId && !processedImageUrl && (
             <div className="success-message">
               <p>上传成功！任务ID: {taskId}</p>
             </div>
@@ -212,7 +364,10 @@ const UploadComponent: React.FC<FileUploadProps> = ({
               {errorMessages.map((error, index) => (
                 <p key={index} className="error-message">{error}</p>
               ))}
-              <button onClick={handleUpload} className="retry-btn">重试</button>
+              <div className="error-actions">
+                <button onClick={handleRetry} className="retry-btn">重试</button>
+                <span className="retry-count">({retryCountRef.current}/{maxRetries})</span>
+              </div>
             </div>
           )}
         </div>

@@ -2,11 +2,14 @@ import os
 from celery import Celery
 from .config import settings
 
+# 创建Redis连接URL
+redis_url = f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
+
 # 创建Celery实例，使用Redis作为broker和backend
 celery_app = Celery(
     "image_bg_remove",
-    broker=settings.REDIS_URL,
-    backend=settings.REDIS_URL,
+    broker=redis_url,
+    backend=redis_url,
     include=['app.tasks']  # 明确包含任务模块
 )
 

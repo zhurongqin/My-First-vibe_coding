@@ -56,7 +56,7 @@ class ApiClient {
   // 获取处理状态
   async getProcessingStatus(taskId) {
     try {
-      const response = await fetch(`${this.baseURL}/api/v1/status/${taskId}`);
+      const response = await fetch(`${this.baseURL}/api/v1/tasks/status/${taskId}`);
       if (!response.ok) {
         throw new Error(`获取状态失败: ${response.status}`);
       }
@@ -70,7 +70,7 @@ class ApiClient {
   // 获取处理结果
   async getProcessingResult(taskId) {
     try {
-      const response = await fetch(`${this.baseURL}/api/v1/result/${taskId}`);
+      const response = await fetch(`${this.baseURL}/api/v1/tasks/result/${taskId}`);
       if (!response.ok) {
         throw new Error(`获取结果失败: ${response.status}`);
       }
